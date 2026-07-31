@@ -1,0 +1,289 @@
+// Relaix — contract between the control plane and the Android agents.
+//
+// Field-by-field rationale lives in docs/protocol.md; that document is the
+// specification this file implements. Keep the two in sync.
+//
+// Compatibility rule for package v1: only additive changes. Add fields with
+// fresh numbers, add oneof cases, add enum values. Never renumber a field,
+// never change a type, never reuse a retired number (mark it reserved).
+// Breaking changes go to a new package served alongside this one, because the
+// fleet updates by app-store rollout and old agents must keep working.
+
+syntax = "proto3";
+
+package smsgateway.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/KGMA74/relaix-server/gen/smsgateway/v1;smsgatewayv1";
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+service DeviceGateway {
+  // Called once in a device's lifetime. Trades a short-lived enrollment token
+  // (scanned from a QR code) for a long-lived device token. Kept separate from
+  // Connect because it authenticates differently, which lets the stream keep a
+  // uniform rule: every message on Connect carries a device_token.
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+
+  // Held open for the device's entire uptime. The agent dials out — phones sit
+  // behind carrier NAT and can never be reached inbound — and the server pushes
+  // work down the connection the device already opened.
+  rpc Connect(stream DeviceMessage) returns (stream ServerMessage);
+}
+
+// ---------------------------------------------------------------------------
+// Enrollment
+// ---------------------------------------------------------------------------
+
+message EnrollRequest {
+  // Single-use token from the QR code. Consumed atomically by the server, so a
+  // screenshot of the QR is worthless after the first enrollment.
+  string enrollment_token = 1;
+
+  DeviceInfo device_info = 2;
+}
+
+message EnrollResponse {
+  // Server-assigned stable identifier. This is the value callers pass as
+  // deviceId on POST /send.
+  string device_id = 1;
+
+  // Long-lived credential, returned exactly once. The server keeps only a hash.
+  string device_token = 2;
+}
+
+// Descriptive information about a handset. Sent at enrollment and again on
+// every Register, so the server's view survives OS updates and SIM swaps.
+message DeviceInfo {
+  // Human-readable name for the operator ("desk phone", "SIM Orange 2").
+  string label = 1;
+
+  // The device's own MSISDN in E.164. This is the number recipients see, since
+  // there is no custom sender ID. May be empty: Android cannot always read it.
+  string phone_number = 2;
+
+  string manufacturer = 3;
+  string model = 4;
+
+  // Android release, e.g. "14". Also a hint for platform-specific SMS quirks.
+  string os_version = 5;
+
+  // Agent app version. Needed to interpret behaviour during a staged rollout.
+  string agent_version = 6;
+
+  // Network operator from the SIM. Relevant because sending limits are per
+  // carrier.
+  string carrier = 7;
+}
+
+// ---------------------------------------------------------------------------
+// Stream envelopes
+// ---------------------------------------------------------------------------
+
+// Device to server. A oneof rather than several optional fields so that
+// "exactly one payload" is enforced by the schema instead of by a validator.
+message DeviceMessage {
+  // Sender-generated UUID. Lets the server drop a message replayed after a
+  // reconnect, and ties log lines on both sides together.
+  string message_id = 1;
+
+  // Authenticates this message. Present on every message rather than once at
+  // stream open, so each frame is verifiable on its own terms and the handler
+  // holds no per-connection auth state.
+  string device_token = 2;
+
+  // When the agent produced the message. Compared against server time to spot
+  // a skewed clock and to separate queueing delay from network delay.
+  google.protobuf.Timestamp sent_at = 3;
+
+  oneof payload {
+    Register register = 10;
+    Heartbeat heartbeat = 11;
+    JobAck job_ack = 12;
+    JobResult job_result = 13;
+  }
+}
+
+// Server to device. No token in this direction: the device authenticated the
+// server by TLS when it dialed, and it is reading a stream it opened itself.
+message ServerMessage {
+  string message_id = 1;
+  google.protobuf.Timestamp sent_at = 2;
+
+  oneof payload {
+    RegisterAck register_ack = 10;
+    SendSmsJob send_sms_job = 11;
+    CancelJob cancel_job = 12;
+    Ping ping = 13;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Device -> server payloads
+// ---------------------------------------------------------------------------
+
+// First message on every new stream. Announces that the device is reachable on
+// this connection.
+message Register {
+  DeviceInfo device_info = 1;
+
+  // Initial snapshot, so the scheduler can consider the device immediately
+  // instead of waiting for the first heartbeat.
+  DeviceHealth health = 2;
+
+  // Jobs the agent believes it still holds from a previous connection. Lets the
+  // server reconcile after a reconnect rather than blindly re-dispatching work
+  // that is already in flight on the handset.
+  repeated string pending_job_ids = 3;
+}
+
+// Sent on the interval given in RegisterAck. Proves liveness and carries fresh
+// health. A device whose heartbeats stop is dropped from the ready set even if
+// the socket still looks alive — a phone in a tunnel often leaves one that does.
+message Heartbeat {
+  DeviceHealth health = 1;
+}
+
+message DeviceHealth {
+  // 0-100. A phone below a threshold is deprioritized: sending on a dying
+  // battery risks the agent being killed mid-job.
+  int32 battery_level = 1;
+
+  // A charging phone at 15% is fine; an unplugged one is not. The pair is more
+  // informative than the level alone.
+  bool is_charging = 2;
+
+  // Normalized 0-4, NOT raw dBm. Android reports a different raw scale per
+  // radio technology (GSM RSSI, LTE RSRP, NR SS-RSRP), so raw values are not
+  // comparable across a mixed fleet. 0 = unusable, 4 = great. Level 0 excludes
+  // the device from the ready set.
+  int32 signal_strength = 3;
+
+  // e.g. "LTE", "NR", "GSM". Diagnostic context for the signal level.
+  string network_type = 4;
+
+  // Whether the SIM is present and unlocked. A phone can be perfectly healthy
+  // and still have no usable SIM.
+  bool sim_ready = 5;
+
+  // SMS sent in the trailing hour, as counted by the agent. Feeds per-device
+  // rate limiting so the fleet does not trip a carrier's anti-spam thresholds.
+  // Advisory in V1; server-side enforcement is a later change.
+  int32 sent_last_hour = 6;
+
+  // Whether SEND_SMS and the other runtime permissions are currently granted.
+  // A user can revoke them at any time; without this the failure mode is a
+  // device that accepts jobs and fails every one.
+  bool permissions_ok = 7;
+}
+
+// Sent as soon as the agent receives a job, before attempting to send. The
+// server writing to the stream is not evidence the phone got it, and a fast
+// explicit refusal lets the scheduler reassign on the next tick instead of
+// waiting for a timeout.
+message JobAck {
+  string job_id = 1;
+
+  // False when the device knows it cannot: no SIM, permissions revoked, rate
+  // cap reached.
+  bool accepted = 2;
+
+  // Why it was refused; empty when accepted. Surfaced in job_events.
+  string reason = 3;
+}
+
+// Terminal outcome, sent once the platform reports back. May arrive more than
+// once after a reconnect; a repeat for an already-terminal job is a no-op.
+message JobResult {
+  string job_id = 1;
+  JobStatus status = 2;
+
+  // Platform or carrier identifier when failed, e.g. the SmsManager result
+  // code. Stable enough to match on in automation.
+  string error_code = 3;
+
+  // Human-readable detail for operators.
+  string error_message = 4;
+
+  // Number of SMS parts actually sent. A long or non-GSM-7 body is split into
+  // several billed messages; callers need this to reconcile cost.
+  int32 parts_sent = 5;
+
+  // When the platform reported the outcome on the device.
+  google.protobuf.Timestamp completed_at = 6;
+}
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+
+  // The handset handed the message to the network.
+  JOB_STATUS_SENT = 1;
+
+  // A delivery report came back from the recipient's network. Many carriers
+  // never send one, so this is a bonus, not the expected terminal state — a
+  // caller that waits for it will wait forever on some networks.
+  JOB_STATUS_DELIVERED = 2;
+
+  JOB_STATUS_FAILED = 3;
+  JOB_STATUS_CANCELLED = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Server -> device payloads
+// ---------------------------------------------------------------------------
+
+message RegisterAck {
+  // False when the token is invalid or an operator disabled the device.
+  bool accepted = 1;
+
+  // Why, when refused. The agent shows this rather than retrying blindly.
+  string reason = 2;
+
+  // How often to heartbeat. Server-controlled so the cadence can be tuned
+  // fleet-wide without shipping a new app: the trade-off between detection
+  // latency and battery is an operator's call.
+  int32 heartbeat_interval_seconds = 3;
+
+  // Of the pending_job_ids the device reported, those the server considers
+  // dead. The agent drops them instead of sending a message the server already
+  // gave up on and possibly re-dispatched elsewhere.
+  repeated string stale_job_ids = 4;
+}
+
+message SendSmsJob {
+  // Server-assigned. The idempotency key: an agent that has already handled
+  // this id must not send again. Job delivery is at-least-once.
+  string job_id = 1;
+
+  // Destination number, E.164.
+  string recipient = 2;
+
+  // Message text, UTF-8. The agent splits it into parts, not the server — part
+  // counting depends on encoding decisions the platform makes.
+  string body = 3;
+
+  // Local ordering hint for an agent holding several jobs at once. Scheduling
+  // priority is applied server-side; this only orders an assigned batch.
+  int32 priority = 4;
+
+  // After this the agent must not send and reports the job failed. Stops a
+  // phone that was offline for hours from delivering a stale OTP on reconnect:
+  // late delivery of a time-sensitive message is worse than none.
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+// Sent when DELETE /jobs/:id arrives for a job already pushed to a device.
+// Best-effort: once the handset has passed the message to the network there is
+// no recall, so the agent cancels only if it has not sent yet and reports the
+// real outcome either way.
+message CancelJob {
+  string job_id = 1;
+}
+
+// Application-level liveness check on top of HTTP/2 keepalive, to detect a
+// half-open connection the transport still believes is healthy. The agent
+// responds with its next heartbeat.
+message Ping {}

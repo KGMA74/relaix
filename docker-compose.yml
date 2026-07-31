@@ -1,0 +1,74 @@
+# Relaix — local development stack.
+#
+#   docker compose up --build
+#
+# Then, with RELAIX_API_KEY from .env (or the default below):
+#
+#   curl -H "Authorization: Bearer dev-api-key" localhost:8080/devices
+#   curl -X POST -H "Authorization: Bearer dev-api-key" \
+#        localhost:8080/admin/devices/enroll-token?format=png --output qr.png
+#
+# The secrets here are development defaults and are meant to be replaced. They
+# are spelled out rather than generated so that `up` works with no setup, and
+# named obviously so nobody mistakes them for something safe.
+
+name: relaix
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: relaix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-relaix-dev-password}
+      POSTGRES_DB: relaix
+    ports:
+      # Published so migrations and psql can be run from the host during
+      # development. A real deployment would not expose the database at all.
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # gatewayd runs its own migrations at startup, so it must not start
+      # against a database that is still initialising: pg_isready is what makes
+      # depends_on mean "ready", not merely "running".
+      test: ["CMD-SHELL", "pg_isready -U relaix -d relaix"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+    restart: unless-stopped
+
+  gatewayd:
+    build:
+      context: ./server
+      args:
+        VERSION: ${VERSION:-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RELAIX_DATABASE_URL: postgres://relaix:${POSTGRES_PASSWORD:-relaix-dev-password}@postgres:5432/relaix?sslmode=disable
+      RELAIX_HTTP_ADDR: ":8080"
+      RELAIX_GRPC_ADDR: ":9090"
+      RELAIX_API_KEY: ${RELAIX_API_KEY:-dev-api-key}
+      RELAIX_CALLBACK_SECRET: ${RELAIX_CALLBACK_SECRET:-dev-callback-secret}
+      # What the QR code tells a phone to dial. Localhost is useless to a
+      # handset: set this to an address the phone can actually reach.
+      RELAIX_PUBLIC_URL: ${RELAIX_PUBLIC_URL:-grpc://host.docker.internal:9090}
+      RELAIX_LOG_LEVEL: ${RELAIX_LOG_LEVEL:-info}
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+      - "${GRPC_PORT:-9090}:9090"
+    healthcheck:
+      # /readyz, not /healthz: readiness is what should gate traffic, and it is
+      # the one that notices the database going away. The image has no shell and
+      # no curl, so the binary probes itself.
+      test: ["CMD", "/gatewayd", "-health-check"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  pgdata:

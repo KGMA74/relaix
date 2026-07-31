@@ -1,0 +1,45 @@
+# --- Go ---
+bin/
+dist/
+vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.txt
+
+# Generated protobuf code is committed on purpose (see docs/protocol.md), so *.pb.go
+# is deliberately NOT ignored here.
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+
+# --- Local working files ---
+# Backlog is a personal working document, not part of the public repo.
+docs/backlog.md
+
+# --- Android ---
+*.apk
+*.aab
+*.keystore
+*.jks
+local.properties
+.gradle/
+build/
+captures/
+.cxx/
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

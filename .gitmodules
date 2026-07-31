@@ -1,0 +1,6 @@
+[submodule "server"]
+	path = server
+	url = https://github.com/KGMA74/relaix-server.git
+[submodule "android"]
+	path = android
+	url = https://github.com/KGMA74/relaix-agent.git

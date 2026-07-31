@@ -1,0 +1,22 @@
+version: v2
+
+# proto/ is the single source of truth for the contract; the Go code generated
+# from it belongs to the server, which is its own repository (the server/
+# submodule). So generation writes into server/gen/ and the result is committed
+# there, in relaix-server — not here. That keeps this repo free of any Go
+# module while leaving relaix-server buildable on its own, with no need for buf
+# or a matching plugin set.
+#
+# Run `buf generate` from this directory after any change to proto/, and commit
+# the regenerated files in the server submodule alongside the proto change.
+
+clean: true
+
+plugins:
+  - local: protoc-gen-go
+    out: server/gen
+    opt: paths=source_relative
+
+  - local: protoc-gen-go-grpc
+    out: server/gen
+    opt: paths=source_relative
