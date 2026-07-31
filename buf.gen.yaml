@@ -1,18 +1,19 @@
 version: v2
 
-# proto/ is the single source of truth for the contract; the Go code generated
-# from it belongs to the server, which is its own repository (the server/
-# submodule). So generation writes into server/gen/ and the result is committed
-# there, in relaix-server — not here. That keeps this repo free of any Go
-# module while leaving relaix-server buildable on its own, with no need for buf
-# or a matching plugin set.
+# proto/ is the single source of truth for the contract; the generated code
+# belongs to whichever repo consumes it — server/ for Go, android/ for
+# Kotlin — not to this repo. That keeps this repo free of any Go module or
+# Android toolchain while leaving each consumer buildable on its own.
 #
-# Run `buf generate` from this directory after any change to proto/, and commit
-# the regenerated files in the server submodule alongside the proto change.
+# Run `buf generate` from this directory after any change to proto/, and
+# commit the regenerated files in the affected submodule(s) alongside the
+# proto change.
 
 clean: true
 
 plugins:
+  # --- Go, for server/ (relaix-server) ---
+  # protoc-gen-go and protoc-gen-go-grpc are local Go plugins (go install).
   - local: protoc-gen-go
     out: server/gen
     opt: paths=source_relative
@@ -20,3 +21,21 @@ plugins:
   - local: protoc-gen-go-grpc
     out: server/gen
     opt: paths=source_relative
+
+  # --- Kotlin/Java, for android/ (relaix-agent) ---
+  # Remote BSR plugins: no local toolchain needed to regenerate, matching the
+  # "no protoc, no plugin set to keep in sync" goal on the Go side. Full
+  # protobuf-java/grpc-java, not the *lite* runtimes: no javalite plugin is
+  # published on the BSR, and adding one would mean maintaining a local
+  # protoc + protoc-gen-javalite toolchain just for this. The APK-size
+  # tradeoff is accepted; the gRPC Kotlin coroutine stubs are generated on
+  # top of the Java classes, all four plugins write into the same tree so
+  # a single source root covers everything.
+  - remote: buf.build/protocolbuffers/java
+    out: android/gen
+  - remote: buf.build/protocolbuffers/kotlin
+    out: android/gen
+  - remote: buf.build/grpc/java
+    out: android/gen
+  - remote: buf.build/grpc/kotlin
+    out: android/gen
