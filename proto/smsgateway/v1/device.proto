@@ -77,6 +77,44 @@ message DeviceInfo {
   // Network operator from the SIM. Relevant because sending limits are per
   // carrier.
   string carrier = 7;
+
+  // Every SIM the handset can send from.
+  //
+  // phone_number and carrier above describe the *default* SMS subscription
+  // only, which is what a single-SIM phone reports and what a dual-SIM phone
+  // would send from if nobody said otherwise. They stay because every existing
+  // agent fills them and every existing row was written from them.
+  //
+  // A dual-SIM handset is really two sending nodes: sending limits are per SIM
+  // and the number a recipient sees is per SIM. Listing them lets a caller
+  // name one on SendSmsJob instead of being stuck with whatever the phone's
+  // settings happen to say.
+  repeated SimInfo sims = 8;
+}
+
+// One SIM the agent can send from.
+message SimInfo {
+  // Android's subscription id. Stable while the SIM stays in the phone, and
+  // the value SendSmsJob.subscription_id refers to. Not a slot: slots get
+  // reused when a SIM is swapped, which would silently redirect traffic.
+  int32 subscription_id = 1;
+
+  // Physical slot, 0-based. Reported for the operator's benefit — "the one in
+  // the top tray" is how people actually talk about SIMs — never for routing.
+  int32 slot_index = 2;
+
+  // MSISDN in E.164 when the platform will say. Often empty; carriers do not
+  // reliably write it to the SIM.
+  string phone_number = 3;
+
+  string carrier = 4;
+
+  // What the user named it in Android's settings, e.g. "Perso" or "Work".
+  string display_name = 5;
+
+  // Whether this SIM is the default for outgoing SMS. Exactly one is, and it
+  // is the one used when a job names no subscription.
+  bool is_default_sms = 6;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +216,31 @@ message DeviceHealth {
   // A user can revoke them at any time; without this the failure mode is a
   // device that accepts jobs and fails every one.
   bool permissions_ok = 7;
+
+  // Per-SIM figures, when the handset has more than one.
+  //
+  // The fields above summarise the default SMS subscription, which is all a
+  // single-SIM phone has. These carry what differs between SIMs: signal is per
+  // radio, and the hourly count that matters for rate limiting is per SIM,
+  // because the carrier meters the SIM and not the handset.
+  repeated SimHealth sims = 8;
+}
+
+// The changing half of a SIM. Identity lives in SimInfo; this is what a
+// heartbeat refreshes.
+message SimHealth {
+  // Matches SimInfo.subscription_id.
+  int32 subscription_id = 1;
+
+  // Normalized 0-4, same scale and same reason as the field above.
+  int32 signal_strength = 2;
+
+  bool sim_ready = 3;
+
+  // SMS parts sent from this SIM in the trailing hour. The per-device total
+  // above is the sum, and it is the wrong number to rate limit on: two SIMs
+  // each at their carrier's ceiling look like one device at twice the limit.
+  int32 sent_last_hour = 4;
 }
 
 // Sent as soon as the agent receives a job, before attempting to send. The
@@ -193,6 +256,18 @@ message JobAck {
 
   // Why it was refused; empty when accepted. Surfaced in job_events.
   string reason = 3;
+
+  // Whether retrying could ever help.
+  //
+  // Some refusals will not change by waiting: a SIM the handset does not have,
+  // a recipient the job never carried, a deadline already past. Releasing
+  // those back to the queue burns the job's attempts on a device that will
+  // refuse identically every time, and the caller ends up with a generic
+  // "too many attempts" instead of the reason the agent already knew.
+  //
+  // Default false means transient, which is how every refusal behaved before
+  // this field existed — an agent that does not set it keeps working.
+  bool permanent = 4;
 }
 
 // Terminal outcome, sent once the platform reports back. May arrive more than
@@ -273,6 +348,17 @@ message SendSmsJob {
   // phone that was offline for hours from delivering a stale OTP on reconnect:
   // late delivery of a time-sensitive message is worse than none.
   google.protobuf.Timestamp expires_at = 5;
+
+  // Which SIM to send from, matching a SimInfo.subscription_id the device
+  // reported. Zero means "the handset's default SMS subscription", which is
+  // what every job carried before this field existed and what a single-SIM
+  // phone always uses.
+  //
+  // A named subscription the device does not have is refused in JobAck rather
+  // than quietly sent from another SIM: the recipient sees the sender's
+  // number, and silently changing it would bill the wrong SIM and break any
+  // reply the caller expected.
+  int32 subscription_id = 6;
 }
 
 // Sent when DELETE /jobs/:id arrives for a job already pushed to a device.

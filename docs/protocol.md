@@ -151,6 +151,24 @@ an OS update or a SIM swap.
 | `os_version` | `string` | Android release, e.g. `14`. Diagnostics, and a hint for platform-specific SMS quirks. |
 | `agent_version` | `string` | Agent app version. Needed to interpret behaviour during a staged rollout and to spot phones that never updated. |
 | `carrier` | `string` | Network operator name as reported by the SIM. Relevant because sending limits are per carrier. |
+| `sims` | `repeated SimInfo` | Every SIM the handset can send from. Empty on a phone that cannot enumerate them. |
+
+### `SimInfo`
+
+A dual-SIM handset is really two sending nodes: the carrier meters each SIM
+separately, and the number a recipient sees belongs to the SIM rather than the
+phone. `phone_number` and `carrier` above describe only the *default* SMS
+subscription — what a single-SIM phone has, and what a dual-SIM phone would
+send from if nobody said otherwise.
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `subscription_id` | `int32` | Android's subscription id, and the value `SendSmsJob.subscription_id` refers to. Deliberately not the slot: slots are reused when a SIM is swapped, which would silently redirect traffic to a different number. |
+| `slot_index` | `int32` | Physical slot, 0-based. For the operator's benefit — "the one in the top tray" is how people talk about SIMs — never for routing. |
+| `phone_number` | `string` | MSISDN in E.164 when the platform will say. Often empty. |
+| `carrier` | `string` | Network operator for this SIM. |
+| `display_name` | `string` | What the user named it in Android settings. |
+| `is_default_sms` | `bool` | Whether this is the subscription used when a job names none. |
 
 ---
 
@@ -235,6 +253,17 @@ a tunnel often leaves a socket that looks fine for minutes.
 | `sim_ready` | `bool` | Whether the SIM is present and unlocked. A phone can be perfectly healthy and still have no usable SIM. |
 | `sent_last_hour` | `int32` | Count of SMS sent in the trailing hour, as counted by the agent. Feeds per-device rate limiting so the fleet does not trip a carrier's anti-spam thresholds. Advisory in V1; the server-side enforcement is a backlog item. |
 | `permissions_ok` | `bool` | Whether `SEND_SMS` and the other required runtime permissions are currently granted. A user can revoke them at any time, and the failure mode is otherwise a device that accepts jobs and fails every one. |
+| `sims` | `repeated SimHealth` | Per-SIM signal, readiness and hourly count. Empty on a single-SIM phone, where the fields above already say it. |
+
+### `SimHealth`
+
+`SimInfo` carries a SIM's identity, which changes only on a swap; this carries
+what a heartbeat refreshes. Keyed by `subscription_id`.
+
+`sent_last_hour` is the field that matters most here: the per-device total is
+the sum across SIMs, and rate limiting on it is wrong, because two SIMs each
+sitting at their carrier's ceiling look identical to one device at twice the
+limit.
 
 ### `JobAck`
 
@@ -309,6 +338,7 @@ The actual work.
 | `body` | `string` | Message text, UTF-8. The agent, not the server, splits it into parts — part counting depends on encoding decisions the platform makes. |
 | `priority` | `int32` | Carried through for the agent's local ordering when it holds several jobs at once. Scheduling priority is applied server-side; this is only about the order of an already-assigned batch. |
 | `expires_at` | `Timestamp` | After this, the agent must not send and should report the job failed. Prevents a phone that was offline for hours from delivering a stale OTP on reconnect — late delivery of a time-sensitive message is worse than none. |
+| `subscription_id` | `int32` | Which SIM to send from, matching a `SimInfo.subscription_id` the device reported. Zero means the handset's default SMS subscription, which is what every job carried before this field existed. A subscription the device does not have is refused in `JobAck` rather than quietly sent from another SIM: the recipient sees the sender's number, so substituting one would bill the wrong SIM and break any reply the caller expected. |
 
 ### `CancelJob`
 
