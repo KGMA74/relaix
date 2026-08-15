@@ -72,6 +72,11 @@ buf lint && buf generate   # from this directory
 - [Architecture](docs/architecture.md) — components, design decisions, and their rationale.
 - [Protocol](docs/protocol.md) — the gRPC service and every message on the wire.
 
+## Author
+
+Relaix is built by **[KGMA74](https://github.com/KGMA74)** — more work, write-ups and
+contact details at **[ryukfearless.digital](https://ryukfearless.digital)**.
+
 ## License
 
 [Apache License 2.0](LICENSE).
