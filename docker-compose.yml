@@ -2,7 +2,9 @@
 #
 #   docker compose up --build
 #
-# Then, with RELAIX_API_KEY from .env (or the default below):
+# The dashboard is at http://localhost:8080/ui — sign in with RELAIX_API_KEY.
+#
+# Or straight against the API, with RELAIX_API_KEY from .env (or the default below):
 #
 #   curl -H "Authorization: Bearer dev-api-key" localhost:8080/devices
 #   curl -X POST -H "Authorization: Bearer dev-api-key" \

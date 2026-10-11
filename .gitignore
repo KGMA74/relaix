@@ -43,3 +43,7 @@ captures/
 *.iml
 .DS_Store
 Thumbs.db
+
+# --- JVM crash dumps (Gradle running out of memory) ---
+hs_err_pid*.log
+replay_pid*.log
