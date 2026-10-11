@@ -21,23 +21,34 @@ that dials out and holds an open gRPC bidirectional stream. Because phones sit b
 carrier NAT and are never reachable from the internet, the device always initiates the
 connection and the server pushes jobs down the stream it already has.
 
+```mermaid
+flowchart LR
+    APP["Your application<br/>REST client"] -->|1. POST /send| API
+    OP["Operator<br/>dashboard /ui"] -->|send, history, devices| API
+
+    subgraph CP["gatewayd — Go control plane"]
+        API["REST API"] --> SCH["Scheduler<br/>tick loop"]
+        SCH --> HUB["Hub<br/>actor goroutine"]
+        HUB --- GRPC["gRPC server"]
+        CB["Callback watcher"]
+    end
+
+    PHONE["Android agent<br/>phone A, B…"] ==>|2. dials out, holds<br/>a bidi stream| GRPC
+    GRPC ==>|3. job pushed down<br/>the open stream| PHONE
+    PHONE -->|4. SMS through<br/>the SIM| NET(["Carrier network"])
+    PHONE ==>|5. ack, result,<br/>heartbeats| GRPC
+    CB -->|6. signed webhook<br/>HMAC| APP
+
+    CP --- DB[("PostgreSQL")]
+
+    classDef core fill:#312E81,stroke:#818CF8,stroke-width:2px,color:#fff
+    classDef agent fill:#064E3B,stroke:#34D399,color:#fff
+    class API,SCH,HUB,GRPC,CB,DB core
+    class PHONE agent
 ```
-   HTTP client                Relaix control plane (Go)              Android agents
-        │                                                                  │
-        │  POST /send          ┌──────────────────────────┐                │
-        ├─────────────────────►│  REST API                │                │
-        │                      ├──────────────────────────┤                │
-        │                      │  scheduler (tick loop)   │                │
-        │                      ├──────────────────────────┤   gRPC bidi    │
-        │                      │  hub (actor goroutine)   │◄══════════════►│ phone A
-        │                      ├──────────────────────────┤   stream       │
-        │                      │  gRPC server             │◄══════════════►│ phone B
-        │                      ├──────────────────────────┤                │
-        │                      │  callback watcher        │                │◄─ SMS out
-        │  webhook (HMAC)      ├──────────────────────────┤                │
-        │◄─────────────────────┤  Postgres                │                │
-        │                      └──────────────────────────┘                │
-```
+
+Phones sit behind carrier NAT, so arrows 2 and 3 run over the one connection the phone
+opened: the server never dials a device.
 
 Full write-up, including the gRPC-vs-WebSocket decision and the known limitations:
 **[docs/architecture.md](docs/architecture.md)**.
