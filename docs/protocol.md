@@ -152,6 +152,8 @@ an OS update or a SIM swap.
 | `agent_version` | `string` | Agent app version. Needed to interpret behaviour during a staged rollout and to spot phones that never updated. |
 | `carrier` | `string` | Network operator name as reported by the SIM. Relevant because sending limits are per carrier. |
 | `sims` | `repeated SimInfo` | Every SIM the handset can send from. Empty on a phone that cannot enumerate them. |
+| `hardware_id` | `string` | Stable identifier of the handset (`ANDROID_ID`: scoped to the app's signing key, the user and the device — it survives a reinstall, not a factory reset). Read on `Enroll`: a phone that enrolls again takes back its existing device, id and history included, instead of adding a second one. The server stores only an HMAC of it, keyed by `RELAIX_HARDWARE_ID_KEY`. Empty from older agents, which enroll as a new device every time. |
+| `time_zone` | `string` | IANA zone the phone is set to. The default zone for its availability windows (§9), so "08:00" means eight o'clock where the phone is. |
 
 ### `SimInfo`
 
@@ -186,6 +188,8 @@ message DeviceMessage {
     Heartbeat heartbeat = 11;
     JobAck    job_ack   = 12;
     JobResult job_result = 13;
+    Leave     leave     = 14;
+    PolicyUpdate policy_update = 15;
   }
 }
 ```
@@ -208,6 +212,7 @@ message ServerMessage {
     SendSmsJob  send_sms_job = 11;
     CancelJob   cancel_job   = 12;
     Ping        ping         = 13;
+    DevicePolicy policy      = 14;
   }
 }
 ```
@@ -314,6 +319,30 @@ as the expected terminal state — a caller that waits for it will wait forever 
 networks. The zero value is `UNSPECIFIED` per proto3 convention, so an unset field is never
 mistaken for a real status.
 
+### `Leave`
+
+The operator forgot the enrollment on the phone. Sent while the token still exists, so the
+server can retire the device — exactly as `DELETE /devices/{id}` would: jobs keep their
+history, the token stops authenticating — and close the stream. Best-effort by nature: a
+phone offline at that moment cannot say goodbye and stays listed until an operator removes
+it.
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `reason` | `string` | Free text for the server log. |
+
+### `PolicyUpdate`
+
+The operator edited this phone's rules on the phone itself. The server normalises and
+validates them, stores them under the next version, and answers with the stored
+`DevicePolicy` (§7) — the phone's confirmation and its new copy. Rules that do not validate
+are not stored; the phone is sent the current ones instead, so its copy never drifts from
+what the scheduler enforces. Last write wins between the phone and the dashboard.
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `policy` | `DevicePolicy` | The whole rule set; `version` and `updated_at` are ignored, the server assigns both. |
+
 ---
 
 ## 7. Server → device payloads
@@ -326,6 +355,7 @@ mistaken for a real status.
 | `reason` | `string` | Why, when refused. The agent shows this rather than retrying blindly. |
 | `heartbeat_interval_seconds` | `int32` | How often to heartbeat. Server-controlled so the cadence can be tuned fleet-wide without shipping a new app — the trade-off between detection latency and battery is an operator's call. |
 | `stale_job_ids` | `repeated string` | Of the `pending_job_ids` the device reported, those the server considers dead. The agent drops them instead of sending a message the server already gave up on and possibly re-sent elsewhere. |
+| `policy` | `DevicePolicy` | The device's current rules (§9), so a phone that reconnects shows what the server enforces, whatever changed while it was away. |
 
 ### `SendSmsJob`
 
@@ -349,6 +379,11 @@ The actual work.
 Sent when `DELETE /jobs/:id` arrives for a job already pushed to a device. Best-effort: once
 the handset has passed the message to the network there is no recall, so the agent cancels
 only if it has not sent yet, and reports the real outcome either way.
+
+### `DevicePolicy` (as a `ServerMessage` payload)
+
+Sent when the rules change — from the dashboard, or as the answer to a `PolicyUpdate`.
+Replaces the phone's copy. See §9 for the message itself.
 
 ### `Ping`
 
@@ -394,3 +429,42 @@ agent                                                          server
 
 On reconnect the agent always re-registers and reports `pending_job_ids`; the server
 reconciles rather than assuming either side's view is authoritative.
+
+---
+
+## 9. Device rules
+
+`DevicePolicy` says when a device takes work and for which recipients. The server holds it
+and is the only one that enforces it: the scheduler hands a job to a device — and picks the
+SIM — only where the rules allow it now. The dashboard and the phone both edit it, as views
+of the server's copy. Every field's empty value means "no restriction", so the zero policy
+is a phone that sends anything, any time.
+
+Two kinds of refusal, treated differently. **Not now** — outside the hours, or at a send cap
+— is waited out: a queued job stays pending, an `immediate` one fails. **Never** — no rule
+accepts the recipient — fails at once (`no_device_accepts` when no enabled device would ever
+take it, `rejected_by_device_rules` when a device named by `deviceId` refuses it), because
+waiting cannot change that answer.
+
+| Message | Field | Purpose |
+| --- | --- | --- |
+| `DevicePolicy` | `version` | Server-assigned, +1 on every change. Tells a holder whether its copy is current. |
+| | `availability` | When the device takes work. |
+| | `accept` | Which recipients it takes. |
+| | `sims` | Per-SIM rules, on top of the device's: a SIM must satisfy both. |
+| | `limits` | Caps for the device, all SIMs together. |
+| | `updated_at` | When it last changed. |
+| `Availability` | `time_zone` | IANA zone the windows are read in. Empty: the phone's `DeviceInfo.time_zone`, then UTC. |
+| | `windows` | Available while inside any. None: always available. |
+| `TimeWindow` | `days` | ISO weekdays, 1 = Monday … 7 = Sunday. Empty: every day. |
+| | `start_minute`, `end_minute` | Minutes since midnight, end exclusive. An end at or before the start runs past midnight: 22:00–06:00 is one window. Both 0 is the whole day. |
+| `AcceptRules` | `countries` | ISO 3166-1 alpha-2, matched on the recipient's calling code — narrowed by area code where countries share one (+1 268 is Antigua). The US and Canada cannot be told apart: allowing one allows both. Empty: any country. |
+| | `recipient_pattern` | RE2 expression the E.164 recipient must match (unanchored). Empty: any number. |
+| `SendLimits` | `per_hour`, `per_day` | Caps over sliding windows (60 minutes, 24 hours), counted by the server in messages handed to the device — a multipart message counts once — including those still in flight. 0: no cap. A device or SIM at its cap is "not now". |
+| `SimPolicy` | `subscription_id` | Which SIM, as in `SimInfo`. |
+| | `disabled` | Never send from this SIM. |
+| | `accept`, `availability`, `limits` | As above, for this SIM alone, narrowing the device's. |
+
+When several SIMs may take a job, the default SMS SIM is tried first. The SIM the scheduler
+settles on travels in `SendSmsJob.subscription_id` and is recorded on the job, which is also
+what per-SIM caps count.

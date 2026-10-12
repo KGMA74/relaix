@@ -4,14 +4,30 @@ A self-hosted SMS gateway: your Android phones become SMS-sending nodes, managed
 
 ## Status
 
-**Early development — control plane runs, no SMS leaves a phone yet.**
+**Working end to end, single instance — not yet hardened for production.**
 
-The Go control plane is wired together and works end to end: `docker compose up --build`
-brings up Postgres and `gatewayd`, a device enrolls, the scheduler pushes a job down the
-stream and the result comes back. It has only ever been exercised against a throwaway gRPC
-client, because the Android agent is still a Compose scaffold — it does not enroll, connect,
-or send. That is the work in progress. The implementation lands one atomic commit at a time;
-the git history is the record of what exists so far.
+`docker compose up --build` brings up Postgres and `gatewayd`; the operator dashboard is at
+<http://localhost:8080/ui>. An Android phone running the agent enrolls by scanning a QR code
+from the dashboard, holds its gRPC stream open, and sends the SMS it is handed — from a
+named SIM on a dual-SIM handset — reporting sent and delivered receipts back.
+
+What exists today:
+
+- **API** — `POST /send` (one or many recipients, queued or immediate, scheduled,
+  expiring, pinned to a device or SIM), job history with filters and keyset paging,
+  per-job timeline, cancellation, signed webhooks with retries, fleet stats.
+- **Dashboard** — overview, send, history, devices, integration guide; updated live over
+  server-sent events (`GET /events`).
+- **Fleet** — one entry per physical phone (an HMAC of its hardware id), enable / disable /
+  retire, and a phone can leave the fleet itself when its enrollment is forgotten.
+- **Rules per device and per SIM** — availability hours, accepted countries, a number
+  pattern, and send caps per hour and per day, edited from the dashboard or the phone and
+  enforced by the scheduler. See [protocol.md §9](docs/protocol.md#9-device-rules).
+
+Not there yet: more than one `gatewayd` instance (the hub is in-process; see
+[architecture.md §9](docs/architecture.md#9-multi-instance-v2)), and the operational
+hardening a public deployment needs — TLS is supported but not set up for you, and the
+API has a single shared key.
 
 ## Architecture
 
@@ -62,7 +78,7 @@ Full write-up, including the gRPC-vs-WebSocket decision and the known limitation
 | `proto/` | Protobuf contract shared by server and agent (`proto/smsgateway/v1/`). |
 | `buf.yaml`, `buf.gen.yaml` | Lint and codegen for the contract. |
 | `docs/` | Architecture and wire protocol. |
-| `docker-compose.yml` | Local development stack. Placeholder for now. |
+| `docker-compose.yml` | Local development stack: Postgres and `gatewayd`, dashboard included. |
 
 Clone with the submodule:
 
