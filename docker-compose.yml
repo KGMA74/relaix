@@ -54,6 +54,7 @@ services:
       RELAIX_GRPC_ADDR: ":9090"
       RELAIX_API_KEY: ${RELAIX_API_KEY:-dev-api-key}
       RELAIX_CALLBACK_SECRET: ${RELAIX_CALLBACK_SECRET:-dev-callback-secret}
+      RELAIX_HARDWARE_ID_KEY: ${RELAIX_HARDWARE_ID_KEY:-dev-hardware-id-key}
       # What the QR code tells a phone to dial. Localhost is useless to a
       # handset: set this to an address the phone can actually reach.
       RELAIX_PUBLIC_URL: ${RELAIX_PUBLIC_URL:-grpc://host.docker.internal:9090}
