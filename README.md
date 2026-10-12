@@ -86,7 +86,7 @@ buf lint && buf generate   # from this directory
 ## Author
 
 Relaix is built by **[KGMA74](https://github.com/KGMA74)** — more work, write-ups and
-contact details at **[ryukfearless.digital](https://ryukfearless.digital)**.
+contact details at **[kgmadev.com](https://kgmadev.com)**.
 
 ## License
 
