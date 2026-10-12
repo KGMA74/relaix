@@ -232,6 +232,22 @@ message DevicePolicy {
   repeated SimPolicy sims = 4;
 
   google.protobuf.Timestamp updated_at = 5;
+
+  // How much the device may send, all SIMs together.
+  SendLimits limits = 6;
+}
+
+// Caps on what a device or a SIM is handed. Carriers throttle or block a SIM
+// that sends too much, so a phone should stop being chosen before that, not
+// after. Counted by the server over sliding windows, in messages handed to the
+// device — a multipart message counts once — including those still in flight.
+// A device or SIM at its cap is "not now": queued jobs wait or go elsewhere.
+message SendLimits {
+  // Messages in the last 60 minutes. 0: no cap.
+  int32 per_hour = 1;
+
+  // Messages in the last 24 hours. 0: no cap.
+  int32 per_day = 2;
 }
 
 // When a device takes work.
@@ -280,6 +296,9 @@ message SimPolicy {
 
   // Narrows the device's availability for this SIM: both must hold.
   Availability availability = 4;
+
+  // Caps for this SIM alone, on top of the device's.
+  SendLimits limits = 5;
 }
 
 message Leave {
