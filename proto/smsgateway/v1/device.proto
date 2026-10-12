@@ -90,6 +90,21 @@ message DeviceInfo {
   // name one on SendSmsJob instead of being stuck with whatever the phone's
   // settings happen to say.
   repeated SimInfo sims = 8;
+
+  // Stable identifier of this handset, so the fleet holds one entry per phone.
+  // On Android, Settings.Secure.ANDROID_ID: scoped to the app's signing key,
+  // the user and the device, so it survives a reinstall but is meaningless to
+  // any other app. Read on Enroll: a phone that enrolls again — after a
+  // reinstall, a forget, a lost token — takes back its existing device, id and
+  // history included, instead of adding a second one. The server stores only
+  // an HMAC of it, never the value. Empty from agents that predate it, which
+  // then enroll as a new device every time, as before.
+  string hardware_id = 9;
+
+  // IANA zone the handset is set to, e.g. "Africa/Ouagadougou". The default
+  // zone for its availability windows (DevicePolicy), so "08:00" means eight
+  // in the morning where the phone is, not where the server runs.
+  string time_zone = 10;
 }
 
 // One SIM the agent can send from.
@@ -142,6 +157,8 @@ message DeviceMessage {
     Heartbeat heartbeat = 11;
     JobAck job_ack = 12;
     JobResult job_result = 13;
+    Leave leave = 14;
+    PolicyUpdate policy_update = 15;
   }
 }
 
@@ -156,6 +173,10 @@ message ServerMessage {
     SendSmsJob send_sms_job = 11;
     CancelJob cancel_job = 12;
     Ping ping = 13;
+
+    // The rules changed — from the dashboard, or from this phone and now
+    // stored. Replaces the phone's copy.
+    DevicePolicy policy = 14;
   }
 }
 
@@ -176,6 +197,94 @@ message Register {
   // server reconcile after a reconnect rather than blindly re-dispatching work
   // that is already in flight on the handset.
   repeated string pending_job_ids = 3;
+}
+
+// The device is leaving the fleet for good: its operator chose to forget the
+// enrollment on the phone. The server retires the device — the same as
+// DELETE /devices/{id} — and closes the stream. Sent best-effort before the
+// agent drops its token: a phone offline at that moment cannot say goodbye,
+// and stays listed until an operator removes it.
+// The operator edited this phone's rules on the phone itself. The server
+// validates and stores them, then sends the result back as a DevicePolicy —
+// the same message a dashboard edit produces — so both sides end up holding
+// what the server holds. Last write wins: the server stamps a new version.
+message PolicyUpdate {
+  DevicePolicy policy = 1;
+}
+
+// When and for what a device takes work. Held by the server, which is the only
+// one that enforces it: the scheduler never hands a job to a device, or a SIM,
+// whose rules refuse it. Editable from the dashboard and from the phone; each
+// copy is a view of the server's.
+//
+// Every field's empty value means "no restriction", so the zero policy is a
+// phone that sends anything, any time — what every device was before rules
+// existed.
+message DevicePolicy {
+  // Server-assigned, incremented on every change. Lets a holder tell whether
+  // its copy is current.
+  int64 version = 1;
+
+  Availability availability = 2;
+  AcceptRules accept = 3;
+
+  // Per-SIM rules, on top of the device's: a SIM must satisfy both.
+  repeated SimPolicy sims = 4;
+
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+// When a device takes work.
+message Availability {
+  // IANA zone the windows are read in. Empty: the zone the phone reports
+  // (DeviceInfo.time_zone), then UTC.
+  string time_zone = 1;
+
+  // Available while inside any window. None: always available.
+  repeated TimeWindow windows = 2;
+}
+
+// A daily slot, e.g. weekdays 08:00–20:00.
+message TimeWindow {
+  // ISO weekdays, 1 = Monday … 7 = Sunday. Empty: every day.
+  repeated int32 days = 1;
+
+  // Minutes since midnight, start inclusive, end exclusive. An end at or
+  // before the start runs past midnight into the next day, so 22:00–06:00 is
+  // one window. Both 0 is the whole day.
+  int32 start_minute = 2;
+  int32 end_minute = 3;
+}
+
+// Which recipients a device or SIM accepts. Both conditions must hold.
+message AcceptRules {
+  // ISO 3166-1 alpha-2 codes, matched on the recipient's country calling
+  // code. Empty: any country. Countries that share a code (+1 for the NANP)
+  // cannot be told apart by the number alone; allowing one allows them all.
+  repeated string countries = 1;
+
+  // RE2 regular expression the E.164 recipient must match, e.g. "^\+22670".
+  // Empty: any number.
+  string recipient_pattern = 2;
+}
+
+// Rules for one SIM of a multi-SIM phone.
+message SimPolicy {
+  // SimInfo.subscription_id of the SIM these rules are for.
+  int32 subscription_id = 1;
+
+  // Never send from this SIM.
+  bool disabled = 2;
+
+  AcceptRules accept = 3;
+
+  // Narrows the device's availability for this SIM: both must hold.
+  Availability availability = 4;
+}
+
+message Leave {
+  // Free text for the log, e.g. "forgotten on the device".
+  string reason = 1;
 }
 
 // Sent on the interval given in RegisterAck. Proves liveness and carries fresh
@@ -326,6 +435,10 @@ message RegisterAck {
   // dead. The agent drops them instead of sending a message the server already
   // gave up on and possibly re-dispatched elsewhere.
   repeated string stale_job_ids = 4;
+
+  // The device's current rules, so a phone that reconnects shows what the
+  // server enforces, whatever changed while it was away.
+  DevicePolicy policy = 5;
 }
 
 message SendSmsJob {

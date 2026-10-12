@@ -31,11 +31,17 @@ plugins:
   # tradeoff is accepted; the gRPC Kotlin coroutine stubs are generated on
   # top of the Java classes, all four plugins write into the same tree so
   # a single source root covers everything.
-  - remote: buf.build/protocolbuffers/java
+  #
+  # Pinned, and to the runtimes in android/gradle/libs.versions.toml
+  # (protobuf, grpc, grpcKotlin). Unpinned, a remote plugin is whatever the
+  # BSR serves that day: generated code newer than the runtime it links
+  # against fails at class load ("gencode 4.36.2, runtime 4.35.1") and the
+  # app crashes on start. Bump these together with the runtime versions.
+  - remote: buf.build/protocolbuffers/java:v35.1
     out: android/gen
-  - remote: buf.build/protocolbuffers/kotlin
+  - remote: buf.build/protocolbuffers/kotlin:v35.1
     out: android/gen
-  - remote: buf.build/grpc/java
+  - remote: buf.build/grpc/java:v1.83.1
     out: android/gen
-  - remote: buf.build/grpc/kotlin
+  - remote: buf.build/grpc/kotlin:v1.5.0
     out: android/gen
