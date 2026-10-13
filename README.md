@@ -31,6 +31,11 @@ What exists today:
 - **Received SMS** — a phone forwards the SMS its rules name (e.g. `OrangeMoney`), kept until
   the server has them; listed by `GET /inbox` and posted to a signed webhook
   (`RELAIX_INBOUND_WEBHOOK_URL`). See [protocol.md §10](docs/protocol.md#10-ussd-and-received-sms).
+- **Automations on the phone** — on a received SMS that matches (senders, a pattern with named
+  fields, conditions), the phone itself forwards it with the extracted fields, replies by SMS,
+  posts a signed webhook or runs a USSD code — offline included — and reports what it did.
+  SIM PINs stay on the phone: `{pin}` is filled in there, only for codes approved there,
+  within caps. See [protocol.md §11](docs/protocol.md#11-automations-and-the-pin-vault).
 
 Not there yet: more than one `gatewayd` instance (the hub is in-process; see
 [architecture.md §9](docs/architecture.md#9-multi-instance-v2)), and the operational

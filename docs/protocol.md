@@ -530,3 +530,44 @@ recorded and also what it refused (not covered by the rules, malformed) — rese
 would meet the same answer — but not what it failed to record, which the phone sends again.
 Recorded messages are listed by `GET /inbox` and posted, signed like job callbacks, to the
 account's inbound webhook (`RELAIX_INBOUND_WEBHOOK_URL`).
+
+## 11. Automations and the PIN vault
+
+An automation is a small rule the phone runs by itself on each received SMS — offline
+included — then reports. It belongs to the device's rules (`DevicePolicy.automations`), so
+it is edited in the dashboard, versioned and pushed like the rest of them; an agent lists
+`automations` (and `automation_reply_sms`, `automation_webhook`, `automation_ussd`) in its
+capabilities.
+
+| Message | Field | Purpose |
+| --- | --- | --- |
+| `Automation` | `id`, `name`, `enabled` | `id` is assigned by the gateway when empty. |
+| | `subscription_id` | The SIM it listens on; 0: any. |
+| | `senders` | Matched whole, ignoring case. Empty: any sender. |
+| | `pattern` | Must be found in the body. Its named groups — `(?<amount>[0-9 ]+)`, names a letter then letters or digits — are the fields. The syntax both RE2 and Java accept; the gateway compiles it with RE2. |
+| | `conditions` | `field op value`, all must hold. `eq` `ne` `contains` compare text ignoring case; `gt` `gte` `lt` `lte` compare numbers, spaces dropped and a comma read as a decimal point (`"5 000"`, `"10,25"`). |
+| | `actions` | Run in order; the first failure stops the run. |
+| | `limits` | Runs per sliding hour and day, counted on the phone. |
+| `ForwardAction` | | The SMS goes to the gateway as `SmsReceived` with `automation_id` and `fields`; the gateway checks it against the automation as stored, and lists and posts it like any received SMS. |
+| `ReplySmsAction` | `to`, `text` | An SMS from the SIM it arrived on. `to` must render to an E.164 number — never an alphanumeric sender, never the phone's own number. |
+| `WebhookAction` | `url`, `body`, `secret` | POSTed by the phone itself, kept until the receiver answers 2xx (or 4xx), signed with `secret` like the gateway's callbacks. Empty `body`: a JSON object with the automation, the SMS and its fields. |
+| `UssdAction` | `code` | A USSD template; may contain `{pin}`. |
+
+Templates replace `{name}` with a field or one of `{sender}` `{body}` `{receivedAt}` `{sim}`.
+The gateway refuses a template naming a field the automation does not have. The cases in
+`server/policy/testdata/automation_vectors.json` are run by the gateway, the agent and the
+dashboard's tester alike.
+
+A run is recorded on the phone before its first action — one per automation and SMS, so a
+crash never runs it twice — and reported as `AutomationRun` once over, kept until the
+gateway acknowledges it (`AutomationRunAck`). A USSD step reports its code with `{pin}`
+unresolved.
+
+**The PIN vault.** A SIM's PIN is set on the phone, behind the screen lock, encrypted with a
+key from the Android keystore, and never leaves it. `{pin}` in a code — an automation's
+`UssdAction`, or a `UssdJob` sent to an agent listing `ussd_pin` — is replaced on the phone,
+and only when the code matches a template its owner **approved on the phone** for that SIM,
+within the caps set there: the largest `{amount}` per operation, operations and total per 24
+hours. The gateway can ask for a code; it cannot widen what may use the PIN. A template
+changed from the dashboard is a new string, and needs approving again. A refusal fails the
+job with `PIN_REFUSED`, or the run's step.

@@ -170,6 +170,7 @@ message DeviceMessage {
     Leave leave = 14;
     PolicyUpdate policy_update = 15;
     SmsReceived sms_received = 16;
+    AutomationRun automation_run = 17;
   }
 }
 
@@ -191,6 +192,7 @@ message ServerMessage {
 
     UssdJob ussd_job = 15;
     SmsReceivedAck sms_received_ack = 16;
+    AutomationRunAck automation_run_ack = 17;
   }
 }
 
@@ -252,6 +254,87 @@ message DevicePolicy {
 
   // Which received SMS the phone forwards. Off unless turned on.
   InboundRules inbound = 7;
+
+  // What the phone does by itself when an SMS arrives. Run on the phone,
+  // offline included, by an agent listing "automations" in its capabilities.
+  repeated Automation automations = 8;
+}
+
+// An automation: when a received SMS matches, extract fields from it and act.
+// Defined in the dashboard, run on the phone. See docs/protocol.md §11.
+message Automation {
+  // Stable id, assigned by the server when empty.
+  string id = 1;
+  string name = 2;
+  bool enabled = 3;
+
+  // The SIM it listens on (SimInfo.subscription_id); 0: any SIM of the phone.
+  int32 subscription_id = 4;
+
+  // Senders it reacts to, whole and ignoring case, like InboundRules.senders.
+  // Empty: any sender.
+  repeated string senders = 5;
+
+  // Regular expression the body must contain. Its named groups, (?<amount>…),
+  // are the fields actions use; names are a letter then letters or digits.
+  // The syntax both RE2 and Java accept. Empty: any body, no fields.
+  string pattern = 6;
+
+  // All must hold for the actions to run.
+  repeated AutomationCondition conditions = 7;
+
+  // Run in order; a failure stops the run.
+  repeated AutomationAction actions = 8;
+
+  // Runs per sliding hour and day, counted on the phone. 0: no cap.
+  SendLimits limits = 9;
+}
+
+// A test on a field: a group of the pattern, or sender, body, sim.
+message AutomationCondition {
+  string field = 1;
+  // "eq", "ne", "contains" compare text; "gt", "gte", "lt", "lte" numbers
+  // (spaces dropped, a comma read as a decimal point).
+  string op = 2;
+  string value = 3;
+}
+
+// One thing an automation does. Text fields are templates: {name} is
+// replaced by a field, or one of {sender} {body} {receivedAt} {sim}.
+message AutomationAction {
+  oneof action {
+    // Hand the SMS and its fields to the gateway (SmsReceived.fields).
+    ForwardAction forward = 1;
+    // Send an SMS from the SIM it arrived on.
+    ReplySmsAction reply_sms = 2;
+    // POST from the phone itself, signed like the gateway's callbacks.
+    WebhookAction webhook = 3;
+    // Dial a USSD code; it may use {pin}, the SIM's PIN kept on the phone.
+    UssdAction ussd = 4;
+  }
+}
+
+message ForwardAction {}
+
+message ReplySmsAction {
+  // A number in E.164, or a template giving one: "{sender}", "{from}".
+  string to = 1;
+  string text = 2;
+}
+
+message WebhookAction {
+  string url = 1;
+  // Request body template. Empty: a JSON object with the automation, the SMS
+  // and its fields.
+  string body = 2;
+  // Signs the request (X-Relaix-Signature). Empty: unsigned.
+  string secret = 3;
+}
+
+message UssdAction {
+  // e.g. "*144*2*1*{from}*{amount}*{pin}#". {pin} is resolved on the phone,
+  // and only for a template its owner approved there, within its caps.
+  string code = 1;
 }
 
 // Which received SMS a phone forwards to the server. Applied on the phone,
@@ -356,6 +439,11 @@ message SmsReceived {
 
   // The SIM it arrived on (SimInfo.subscription_id); 0 when unknown.
   int32 subscription_id = 5;
+
+  // Set when an automation's forward action sent it: the automation, and the
+  // fields its pattern extracted.
+  string automation_id = 6;
+  map<string, string> fields = 7;
 }
 
 // Sent on the interval given in RegisterAck. Proves liveness and carries fresh
@@ -574,6 +662,40 @@ message UssdJob {
   // screen the network shows, the way a person would. Empty: the code alone,
   // one request and one answer.
   repeated string replies = 5;
+}
+
+// What an automation did with one received SMS, reported once it is over.
+// Kept by the agent until acknowledged (AutomationRunAck), like SmsReceived.
+// Never carries a PIN: a USSD step reports its code with {pin} unresolved.
+message AutomationRun {
+  // Agent-generated, stable across resends.
+  string id = 1;
+  string automation_id = 2;
+  // Who sent the SMS that triggered it.
+  string sender = 3;
+  google.protobuf.Timestamp started_at = 4;
+  google.protobuf.Timestamp finished_at = 5;
+  // Every step succeeded. False when one failed (the steps after it did not
+  // run) or the run was skipped (its limits were reached; no steps).
+  bool ok = 6;
+  repeated AutomationStep steps = 7;
+  // Why the run stopped or was skipped.
+  string error = 8;
+}
+
+message AutomationStep {
+  // forward, reply_sms, webhook, ussd.
+  string action = 1;
+  bool ok = 2;
+  // What it did or why it failed: the number replied to, the URL, the code.
+  string detail = 3;
+  // A USSD step: what the network displayed.
+  repeated string responses = 4;
+}
+
+// The server has recorded these AutomationRun ids.
+message AutomationRunAck {
+  repeated string ids = 1;
 }
 
 // The server has recorded these SmsReceived ids: the agent may forget them.
