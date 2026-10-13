@@ -105,6 +105,16 @@ message DeviceInfo {
   // zone for its availability windows (DevicePolicy), so "08:00" means eight
   // in the morning where the phone is, not where the server runs.
   string time_zone = 10;
+
+  // What this agent can do beyond sending SMS, so the server never hands a
+  // job to an agent that would not understand it: an unknown ServerMessage
+  // payload is silently dropped by an older agent, and the job would sit
+  // assigned to a phone that never saw it. Values:
+  //   "ussd"         runs a UssdJob with no replies (one request, one answer)
+  //   "ussd_menu"    also runs one with replies (a menu, step by step)
+  //   "inbound_sms"  forwards received SMS (SmsReceived) when its rules say so
+  // Empty from agents that predate the field: SMS only.
+  repeated string capabilities = 11;
 }
 
 // One SIM the agent can send from.
@@ -159,6 +169,7 @@ message DeviceMessage {
     JobResult job_result = 13;
     Leave leave = 14;
     PolicyUpdate policy_update = 15;
+    SmsReceived sms_received = 16;
   }
 }
 
@@ -177,6 +188,9 @@ message ServerMessage {
     // The rules changed — from the dashboard, or from this phone and now
     // stored. Replaces the phone's copy.
     DevicePolicy policy = 14;
+
+    UssdJob ussd_job = 15;
+    SmsReceivedAck sms_received_ack = 16;
   }
 }
 
@@ -235,6 +249,23 @@ message DevicePolicy {
 
   // How much the device may send, all SIMs together.
   SendLimits limits = 6;
+
+  // Which received SMS the phone forwards. Off unless turned on.
+  InboundRules inbound = 7;
+}
+
+// Which received SMS a phone forwards to the server. Applied on the phone,
+// before anything leaves it: a message these rules do not cover is never
+// sent, so turning forwarding on for "OrangeMoney" does not hand the server
+// the owner's personal conversations.
+message InboundRules {
+  // Forward at all. False, the default, forwards nothing.
+  bool enabled = 1;
+
+  // Senders to forward, compared case-insensitively and whole: an
+  // alphanumeric sender id ("OrangeMoney") or a number in E.164. Empty, with
+  // enabled set: every sender.
+  repeated string senders = 2;
 }
 
 // Caps on what a device or a SIM is handed. Carriers throttle or block a SIM
@@ -304,6 +335,27 @@ message SimPolicy {
 message Leave {
   // Free text for the log, e.g. "forgotten on the device".
   string reason = 1;
+}
+
+// An SMS the phone received and its InboundRules forward. The agent keeps it
+// until the server acknowledges it (SmsReceivedAck), and sends it again on
+// every reconnect until then: a message received while offline still arrives.
+message SmsReceived {
+  // Agent-generated, stable across resends: the server records one message
+  // per id and device, however often it arrives.
+  string id = 1;
+
+  // As the network presented it: an alphanumeric sender id or a number.
+  string sender = 2;
+
+  // The whole text, multipart messages joined.
+  string body = 3;
+
+  // When the network delivered it to the phone.
+  google.protobuf.Timestamp received_at = 4;
+
+  // The SIM it arrived on (SimInfo.subscription_id); 0 when unknown.
+  int32 subscription_id = 5;
 }
 
 // Sent on the interval given in RegisterAck. Proves liveness and carries fresh
@@ -417,6 +469,11 @@ message JobResult {
 
   // When the platform reported the outcome on the device.
   google.protobuf.Timestamp completed_at = 6;
+
+  // For a UssdJob: what the network displayed, one entry per screen, in
+  // order — the answer to the code, then to each reply. Also on a failure,
+  // up to the screen where it stopped.
+  repeated string responses = 7;
 }
 
 enum JobStatus {
@@ -491,6 +548,37 @@ message SendSmsJob {
   // number, and silently changing it would bill the wrong SIM and break any
   // reply the caller expected.
   int32 subscription_id = 6;
+}
+
+// Run a USSD code on one SIM and report what the network answers, in a
+// JobResult: SENT with the screens in responses when the network answered,
+// FAILED otherwise. Acknowledged with JobAck like a SendSmsJob, and only sent
+// to an agent that lists "ussd" in its capabilities ("ussd_menu" when replies
+// is not empty).
+message UssdJob {
+  // Server-assigned; the idempotency key, as for SendSmsJob. A USSD session
+  // can move money: an agent that has seen this id must never run it again.
+  string job_id = 1;
+
+  // What is dialed, e.g. "*144#" or "*144*2*1*70000000*5000#".
+  string code = 2;
+
+  // The SIM to dial from (SimInfo.subscription_id); 0 is the handset's
+  // default. A subscription the device does not have is refused in JobAck.
+  int32 subscription_id = 3;
+
+  // After this the agent must not dial, and reports the job failed.
+  google.protobuf.Timestamp expires_at = 4;
+
+  // Answers to the menus the code opens, in order: each is typed into the
+  // screen the network shows, the way a person would. Empty: the code alone,
+  // one request and one answer.
+  repeated string replies = 5;
+}
+
+// The server has recorded these SmsReceived ids: the agent may forget them.
+message SmsReceivedAck {
+  repeated string ids = 1;
 }
 
 // Sent when DELETE /jobs/:id arrives for a job already pushed to a device.

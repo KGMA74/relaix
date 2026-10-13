@@ -468,3 +468,65 @@ waiting cannot change that answer.
 When several SIMs may take a job, the default SMS SIM is tried first. The SIM the scheduler
 settles on travels in `SendSmsJob.subscription_id` and is recorded on the job, which is also
 what per-SIM caps count.
+
+## 10. USSD and received SMS
+
+Two additions beside sending SMS, both opt-in per agent.
+
+**Capabilities.** `DeviceInfo.capabilities` lists what an agent can do beyond SMS. An older
+agent drops a `ServerMessage` payload it does not know without a word, so the server never
+pushes one to an agent that has not announced it: a job it cannot run fails at once with
+`unsupported_by_device` instead of sitting assigned to a phone that never saw it.
+
+| Capability | Meaning |
+| --- | --- |
+| `ussd` | Runs a `UssdJob` without `replies`: one request, one answer. |
+| `ussd_menu` | Also answers the menus a code opens (`replies`). |
+| `inbound_sms` | Forwards received SMS as `SmsReceived`, under `DevicePolicy.inbound`. |
+
+### `UssdJob`
+
+A USSD job is a job like any other — acknowledged with `JobAck`, finished with `JobResult`,
+retried, cancelled, called back — sent to the one device the caller named: a code runs
+against one SIM's account, so another phone's answer would be about another account. Device
+rules apply only through their availability hours; recipient rules and send caps concern SMS.
+
+| Field | Purpose |
+| --- | --- |
+| `job_id` | The idempotency key. A code can move money: an agent that has seen it never runs it again, not even after an interrupted first run. |
+| `code` | What is dialed, e.g. `*144#` or `*144*2*1*70000000*5000#`. |
+| `subscription_id` | The SIM to dial from; 0 is the default. A SIM the device does not have is refused (`JobAck.permanent`). |
+| `expires_at` | After this the agent does not dial and reports the job failed. |
+| `replies` | Typed in order into the menus the code opens. Empty: the code alone. Only sent to a `ussd_menu` agent. |
+
+The outcome is a `JobResult`: `SENT` when the network answered, with each screen it displayed
+in `responses`; `FAILED` otherwise, with what was displayed before it stopped. Android's
+`sendUssdRequest` runs one request at a time per handset, so an agent runs USSD jobs one
+after the other.
+
+A job created with `sensitive` (the code or a reply carries a PIN) never shows its code or
+replies through the API, and the server wipes both once the job is over. Agents do not write
+the code to disk.
+
+### `SmsReceived` and `SmsReceivedAck`
+
+`DevicePolicy.inbound` (`InboundRules`) says which received SMS a phone forwards: none unless
+`enabled`; then those from `senders`, matched whole and ignoring case, or every sender when
+the list is empty. The phone applies the rules before anything leaves it, and the server
+applies them again on arrival.
+
+| Message | Field | Purpose |
+| --- | --- | --- |
+| `SmsReceived` | `id` | Agent-generated, stable across resends: the server records one message per device and id. |
+| | `sender` | Alphanumeric sender id or number, as the network presented it. |
+| | `body` | The whole text, multipart messages joined. |
+| | `received_at` | When the network delivered it. |
+| | `subscription_id` | The SIM it arrived on; 0 when unknown. |
+| `SmsReceivedAck` | `ids` | The server is done with these: the agent may forget them. |
+
+The agent keeps a received message on disk until it is acknowledged, and sends it again on
+every reconnect, so a message received offline still arrives. The server acknowledges what it
+recorded and also what it refused (not covered by the rules, malformed) — resending those
+would meet the same answer — but not what it failed to record, which the phone sends again.
+Recorded messages are listed by `GET /inbox` and posted, signed like job callbacks, to the
+account's inbound webhook (`RELAIX_INBOUND_WEBHOOK_URL`).

@@ -2,6 +2,8 @@
 
 A self-hosted SMS gateway: your Android phones become SMS-sending nodes, managed by a lightweight Go control plane over gRPC.
 
+Rather not run it yourself? A hosted version runs at <https://relaix.kgmadev.com>.
+
 ## Status
 
 **Working end to end, single instance — not yet hardened for production.**
@@ -23,6 +25,12 @@ What exists today:
 - **Rules per device and per SIM** — availability hours, accepted countries, a number
   pattern, and send caps per hour and per day, edited from the dashboard or the phone and
   enforced by the scheduler. See [protocol.md §9](docs/protocol.md#9-device-rules).
+- **USSD** — `POST /ussd` runs a code (`*144#`, a balance, a bundle) on a named phone and
+  SIM; the network's answer comes back on the job, its callback and the live stream. A code
+  carrying a PIN can be marked `sensitive`: never shown, wiped once done.
+- **Received SMS** — a phone forwards the SMS its rules name (e.g. `OrangeMoney`), kept until
+  the server has them; listed by `GET /inbox` and posted to a signed webhook
+  (`RELAIX_INBOUND_WEBHOOK_URL`). See [protocol.md §10](docs/protocol.md#10-ussd-and-received-sms).
 
 Not there yet: more than one `gatewayd` instance (the hub is in-process; see
 [architecture.md §9](docs/architecture.md#9-multi-instance-v2)), and the operational
