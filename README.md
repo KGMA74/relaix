@@ -27,7 +27,10 @@ What exists today:
   enforced by the scheduler. See [protocol.md §9](docs/protocol.md#9-device-rules).
 - **USSD** — `POST /ussd` runs a code (`*144#`, a balance, a bundle) on a named phone and
   SIM; the network's answer comes back on the job, its callback and the live stream. A code
-  carrying a PIN can be marked `sensitive`: never shown, wiped once done.
+  carrying a PIN can be marked `sensitive`: never shown, wiped once done. A job may also
+  carry `replies`, which the phone types into the menus the code opens, one screen at a
+  time, through an accessibility service the user switches on (`ussd_menu`) — that is where
+  a PIN asked for at the end of a menu goes, from the phone's own vault.
 - **Received SMS** — a phone forwards the SMS its rules name (e.g. `OrangeMoney`), kept until
   the server has them; listed by `GET /inbox` and posted to a signed webhook
   (`RELAIX_INBOUND_WEBHOOK_URL`). See [protocol.md §10](docs/protocol.md#10-ussd-and-received-sms).

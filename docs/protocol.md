@@ -484,6 +484,13 @@ pushes one to an agent that has not announced it: a job it cannot run fails at o
 | `ussd_menu` | Also answers the menus a code opens (`replies`). |
 | `inbound_sms` | Forwards received SMS as `SmsReceived`, under `DevicePolicy.inbound`. |
 
+`ussd_menu` is the one capability that is not simply there. The Android agent can answer a
+menu only while its accessibility service — the one component allowed to type into a dialog
+owned by the phone app — is switched on under Android's settings, so it lists the capability
+while that is true and, while it is not, refuses a job carrying `replies` without marking the
+refusal permanent: switching it on changes the answer, and the scheduler is meant to try
+again instead of failing the job.
+
 ### `UssdJob`
 
 A USSD job is a job like any other — acknowledged with `JobAck`, finished with `JobResult`,
