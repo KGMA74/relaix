@@ -536,7 +536,16 @@ every reconnect, so a message received offline still arrives. The server acknowl
 recorded and also what it refused (not covered by the rules, malformed) — resending those
 would meet the same answer — but not what it failed to record, which the phone sends again.
 Recorded messages are listed by `GET /inbox` and posted, signed like job callbacks, to the
-account's inbound webhook (`RELAIX_INBOUND_WEBHOOK_URL`).
+account's inbound webhook (`RELAIX_INBOUND_WEBHOOK_URL`). The payload is `type:
+"sms.received"`, `messageId`, `sender`, `body`, `receivedAt`, the device and SIM, and — when
+an automation forwarded it — `automationId`, `fields` as extracted, and `numbers`: the fields
+that read as numbers, as JSON numbers (`"5 000"` gives `5000`; a value starting with `+` or a
+leading zero, a phone number, stays out).
+
+Every callback, job or received SMS, carries `X-Relaix-Delivery`: the job id or `messageId`,
+**the same on every retry**. A receiver that records the ids it handled, answers 2xx to one
+it has already seen and does nothing else, never acts twice on a retry whose first answer
+was lost — the one property a payment notification cannot do without.
 
 ## 11. Automations and the PIN vault
 
@@ -557,11 +566,20 @@ capabilities.
 | | `limits` | Runs per sliding hour and day, counted on the phone. |
 | `ForwardAction` | | The SMS goes to the gateway as `SmsReceived` with `automation_id` and `fields`; the gateway checks it against the automation as stored, and lists and posts it like any received SMS. |
 | `ReplySmsAction` | `to`, `text` | An SMS from the SIM it arrived on. `to` must render to an E.164 number — never an alphanumeric sender, never the phone's own number. |
-| `WebhookAction` | `url`, `body`, `secret` | POSTed by the phone itself, kept until the receiver answers 2xx (or 4xx), signed with `secret` like the gateway's callbacks. Empty `body`: a JSON object with the automation, the SMS and its fields. |
+| `WebhookAction` | `url`, `body`, `secret` | POSTed by the phone itself, kept until the receiver answers 2xx (or 4xx), signed with `secret` like the gateway's callbacks, with `X-Relaix-Delivery` derived from the SMS, the automation and the action — the same on every retry. Empty `body`: a JSON object with `deliveryId`, the automation, the SMS, its `fields` and `numbers`. A `body` that opens as JSON is filled as JSON (below). |
 | `UssdAction` | `code` | A USSD template; may contain `{pin}`. |
 
 Templates replace `{name}` with a field or one of `{sender}` `{body}` `{receivedAt}` `{sim}`.
-The gateway refuses a template naming a field the automation does not have. The cases in
+The gateway refuses a template naming a field the automation does not have.
+
+A webhook `body` that opens as a JSON object or array (`{"…`, `{}`, `[`) is filled so that
+it stays JSON whatever the SMS said. A field **inside quotes** is escaped there — a quote or
+a line break in the message cannot end the string. A field **outside quotes** is a value: a
+number when it reads as one (spaces dropped, a comma for the decimal point: `"5 000"` gives
+`5000`, `"684,62"` gives `684.62`), `null` when empty, otherwise a quoted string — so a phone
+number left bare by mistake still arrives whole. `{"montant": {amount}, "de": "{from}"}`
+posts `{"montant": 5000, "de": "70123456"}`. The gateway refuses a JSON body that would not
+parse once filled in. Any other body is filled as plain text. The cases in
 `server/policy/testdata/automation_vectors.json` are run by the gateway, the agent and the
 dashboard's tester alike.
 
