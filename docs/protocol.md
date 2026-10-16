@@ -536,11 +536,19 @@ every reconnect, so a message received offline still arrives. The server acknowl
 recorded and also what it refused (not covered by the rules, malformed) — resending those
 would meet the same answer — but not what it failed to record, which the phone sends again.
 Recorded messages are listed by `GET /inbox` and posted, signed like job callbacks, to the
-account's inbound webhook (`RELAIX_INBOUND_WEBHOOK_URL`). The payload is `type:
-"sms.received"`, `messageId`, `sender`, `body`, `receivedAt`, the device and SIM, and — when
+account's inbound webhook (`RELAIX_INBOUND_WEBHOOK_URL`). The body is the webhook envelope with
+`event: "sms.received"`; its `data` holds `messageId`, `sender`, `body`, `receivedAt`, the device and SIM, and — when
 an automation forwarded it — `automationId`, `fields` as extracted, and `numbers`: the fields
 that read as numbers, as JSON numbers (`"5 000"` gives `5000`; a value starting with `+` or a
 leading zero, a phone number, stays out).
+
+Every webhook — job callback, received SMS, an automation's default body — has one shape,
+`{"event": "<name>", "data": {…}}`, so a receiver routes on `event` before reading `data`.
+Job events are `<kind>.<status>` at the job's final state: `sms.sent`, `sms.delivered`,
+`sms.failed`, `sms.cancelled`, `ussd.completed` (the network answered), `ussd.failed`,
+`ussd.cancelled`; their `data` is the job (`jobId`, `kind`, `status`, `recipient`,
+`responses` for USSD…). Received SMS are `sms.received`; an automation's webhook with an
+empty `body` posts `automation.triggered`.
 
 Every callback, job or received SMS, carries `X-Relaix-Delivery`: the job id or `messageId`,
 **the same on every retry**. A receiver that records the ids it handled, answers 2xx to one
@@ -566,7 +574,7 @@ capabilities.
 | | `limits` | Runs per sliding hour and day, counted on the phone. |
 | `ForwardAction` | | The SMS goes to the gateway as `SmsReceived` with `automation_id` and `fields`; the gateway checks it against the automation as stored, and lists and posts it like any received SMS. |
 | `ReplySmsAction` | `to`, `text` | An SMS from the SIM it arrived on. `to` must render to an E.164 number — never an alphanumeric sender, never the phone's own number. |
-| `WebhookAction` | `url`, `body`, `secret` | POSTed by the phone itself, kept until the receiver answers 2xx (or 4xx), signed with `secret` like the gateway's callbacks, with `X-Relaix-Delivery` derived from the SMS, the automation and the action — the same on every retry. Empty `body`: a JSON object with `deliveryId`, the automation, the SMS, its `fields` and `numbers`. A `body` that opens as JSON is filled as JSON (below). |
+| `WebhookAction` | `url`, `body`, `secret` | POSTed by the phone itself, kept until the receiver answers 2xx (or 4xx), signed with `secret` like the gateway's callbacks, with `X-Relaix-Delivery` derived from the SMS, the automation and the action — the same on every retry. Empty `body`: the envelope with `event: "automation.triggered"` and, in `data`, `deliveryId`, the automation, the SMS, its `fields` and `numbers`. A `body` that opens as JSON is filled as JSON (below). |
 | `UssdAction` | `code` | A USSD template; may contain `{pin}`. |
 
 Templates replace `{name}` with a field or one of `{sender}` `{body}` `{receivedAt}` `{sim}`.
