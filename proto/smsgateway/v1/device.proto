@@ -291,6 +291,10 @@ message Automation {
 
   // What it is for, in a sentence or two, shown under its name on the phone.
   string description = 10;
+
+  // Set: the automation runs on this schedule instead of on received SMS;
+  // senders and pattern are then empty.
+  AutomationSchedule schedule = 11;
 }
 
 // A test on a field: a group of the pattern, or sender, body, sim.
@@ -338,6 +342,41 @@ message UssdAction {
   // e.g. "*144*2*1*{from}*{amount}*{pin}#". {pin} is resolved on the phone,
   // and only for a template its owner approved there, within its caps.
   string code = 1;
+
+  // Typed in order into the menus the code opens, like UssdJob.replies; may
+  // use fields. Needs the ussd_menu capability.
+  repeated string replies = 2;
+
+  // Screens that end with "n Suivant" go on: see UssdPaging.
+  UssdPaging paging = 3;
+
+  // Regular expression searched in what the network displayed, every screen
+  // joined by a line break. Its named groups, like the pattern's, become
+  // fields for the actions after this one — "(?<solde>[0-9 .,]+) FCFA".
+  // The syntax both RE2 and Java accept. Empty: nothing extracted.
+  string extract = 4;
+}
+
+// A USSD answer too long for one screen ends with an invitation to see the
+// next one ("n Suivant"). While the last screen contains marker, and fewer
+// than max_pages were read, reply is typed to get the next. Needs ussd_menu.
+message UssdPaging {
+  // Matched ignoring case, e.g. "Suivant".
+  string marker = 1;
+  // What the network asks to be typed, e.g. "n".
+  string reply = 2;
+  // Screens read at most, the first included. 0: 3. At most 10.
+  int32 max_pages = 3;
+}
+
+// When an automation runs by itself rather than on a received SMS: every
+// every_minutes, within window. Run on the phone, offline included. Fields
+// available: {now} and {sim}.
+message AutomationSchedule {
+  // 15 at least, the shortest period Android keeps to.
+  int32 every_minutes = 1;
+  // Only while inside it. Empty: at any time.
+  Availability window = 2;
 }
 
 // Which received SMS a phone forwards to the server. Applied on the phone,
@@ -665,6 +704,9 @@ message UssdJob {
   // screen the network shows, the way a person would. Empty: the code alone,
   // one request and one answer.
   repeated string replies = 5;
+
+  // Follow screens that say there is more ("n Suivant").
+  UssdPaging paging = 6;
 }
 
 // What an automation did with one received SMS, reported once it is over.
@@ -694,6 +736,8 @@ message AutomationStep {
   string detail = 3;
   // A USSD step: what the network displayed.
   repeated string responses = 4;
+  // A USSD step with extract: the fields it found.
+  map<string, string> fields = 5;
 }
 
 // The server has recorded these AutomationRun ids.
