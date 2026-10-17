@@ -288,6 +288,9 @@ message Automation {
 
   // Runs per sliding hour and day, counted on the phone. 0: no cap.
   SendLimits limits = 9;
+
+  // What it is for, in a sentence or two, shown under its name on the phone.
+  string description = 10;
 }
 
 // A test on a field: a group of the pattern, or sender, body, sim.
