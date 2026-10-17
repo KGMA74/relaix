@@ -566,6 +566,7 @@ capabilities.
 | Message | Field | Purpose |
 | --- | --- | --- |
 | `Automation` | `id`, `name`, `enabled` | `id` is assigned by the gateway when empty. |
+| | `description` | What it is for, 500 characters at most: shown under its name in the dashboard and on the phone, and read by an assistant choosing among automations. |
 | | `subscription_id` | The SIM it listens on; 0: any. |
 | | `senders` | Matched whole, ignoring case. Empty: any sender. |
 | | `pattern` | Must be found in the body. Its named groups — `(?<amount>[0-9 ]+)`, names a letter then letters or digits — are the fields. The syntax both RE2 and Java accept; the gateway compiles it with RE2. |
@@ -604,3 +605,17 @@ within the caps set there: the largest `{amount}` per operation, operations and 
 hours. The gateway can ask for a code; it cannot widen what may use the PIN. A template
 changed from the dashboard is a new string, and needs approving again. A refusal fails the
 job with `PIN_REFUSED`, or the run's step.
+
+## 12. The automation library
+
+Automations need not be written from scratch: `GET /api/v1/automations/library` lists
+templates — an automation with `{{key}}` where each account puts its own value (a webhook
+address, a sender, an amount), the `params` that ask for them, a name, a description and a
+category. Installing one fills the values in and saves the result as any automation; in the
+pattern a value is matched as typed, never as a regular expression. Nothing on the wire
+changes: the phone receives an ordinary `Automation`.
+
+The gateway ships a few (`server/library/builtin.json`). A program embedding it supplies
+its own source (`gateway.Extensions.Library`): the hosted platform adds the templates its
+administrator publishes. Assistants find them with the MCP tools `list_automation_library`
+and `install_automation`.
