@@ -55,6 +55,9 @@ services:
       RELAIX_API_KEY: ${RELAIX_API_KEY:-dev-api-key}
       RELAIX_CALLBACK_SECRET: ${RELAIX_CALLBACK_SECRET:-dev-callback-secret}
       RELAIX_HARDWARE_ID_KEY: ${RELAIX_HARDWARE_ID_KEY:-dev-hardware-id-key}
+      # Seals the tokens of assistants connected by MCP; empty: derived from the API key.
+      RELAIX_OAUTH_SECRET: ${RELAIX_OAUTH_SECRET:-}
+      RELAIX_INBOUND_WEBHOOK_URL: ${RELAIX_INBOUND_WEBHOOK_URL:-}
       # What the QR code tells a phone to dial. Localhost is useless to a
       # handset: set this to an address the phone can actually reach.
       RELAIX_PUBLIC_URL: ${RELAIX_PUBLIC_URL:-grpc://host.docker.internal:9090}
